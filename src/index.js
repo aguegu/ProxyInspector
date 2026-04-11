@@ -1,39 +1,69 @@
+import { readFileSync } from 'node:fs';
+import http from 'node:http';
 import chalk from 'chalk';
-import config from 'config';
-import https from 'node:https';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 
-const proxies = config.get('proxies');
+const file = process.argv[2] || 'proxies.txt';
+const target = process.argv[3] || 'http://example.com';
 
-const results = await Promise.allSettled(proxies.map((proxy) =>  new Promise((resolve, reject) => {
-  // console.log(proxy);
-  const agent = new HttpsProxyAgent(proxy);
-  const req = https.get(config.get('target'), { agent }, (res) => {
-    // console.log(res);
-    resolve(res.statusCode);
-  }).setTimeout(1000, () => {
-    console.log('timeout');
-    // req.abort();
-    req.destroy();
-    reject('timeout');
-  }).on('socket', (socket) => {
-    console.log('socket event');
-    socket.setTimeout(1000);   // 5 s of inactivity on the TCP socket
-    socket.on('timeout', () => {
-      console.error('✖ Proxy Error: socket timeout');
-      req.destroy();           // triggers req ‘error’ handler :contentReference[oaicite:3]{index=3}
-      reject('socket timeout');
+let lines;
+try {
+  lines = readFileSync(file, 'utf-8').split('\n');
+} catch (e) {
+  console.error(chalk.red(`Cannot read proxy file: ${file}`));
+  process.exit(1);
+}
+
+const proxies = lines
+  .map(line => line.trim())
+  .filter(line => line && !line.startsWith('#'));
+
+if (proxies.length === 0) {
+  console.error(chalk.red('No proxies found in file.'));
+  process.exit(1);
+}
+
+console.log(`Checking ${proxies.length} proxies against ${target}\n`);
+
+function checkProxy(proxy) {
+  const proxyUrl = new URL(proxy);
+  const targetUrl = new URL(target);
+
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+
+    const req = http.request({
+      host: proxyUrl.hostname,
+      port: proxyUrl.port || 80,
+      method: 'GET',
+      path: target,
+      headers: { Host: targetUrl.host },
+      timeout: 5000,
+    }, (res) => {
+      res.resume();
+      resolve({ statusCode: res.statusCode, ms: Date.now() - start });
     });
-  }).on('error', (e) => reject(e.message))
-    .end();
-})));
 
-console.log(results);
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('timeout'));
+    });
 
-proxies.map((proxy, i) => {
-  if (results[i].status === 'fulfilled') {
-    console.log(chalk.green(proxy) + ' ' + chalk.bgGreen(results[i].status));
+    req.on('error', (e) => reject(e));
+    req.end();
+  });
+}
+
+const results = await Promise.allSettled(proxies.map(checkProxy));
+
+let good = 0;
+for (let i = 0; i < proxies.length; i++) {
+  const r = results[i];
+  if (r.status === 'fulfilled') {
+    good++;
+    console.log(chalk.green(`✔ ${proxies[i]}`) + chalk.gray(` ${r.value.statusCode} ${r.value.ms}ms`));
   } else {
-    console.log(chalk.red(proxy) + ' ' + chalk.bgRed(results[i].status));
+    console.log(chalk.red(`✖ ${proxies[i]}`) + chalk.gray(` ${r.reason.message}`));
   }
-});
+}
+
+console.log(`\n${chalk.green(good)} good / ${chalk.red(proxies.length - good)} bad / ${proxies.length} total`);
