@@ -24,7 +24,7 @@ if (proxies.length === 0) {
 
 console.log(`Checking ${proxies.length} proxies against ${target}\n`);
 
-function checkProxy(proxy) {
+const checkProxy = (proxy) => {
   const proxyUrl = new URL(proxy);
   const targetUrl = new URL(target);
 
@@ -37,7 +37,7 @@ function checkProxy(proxy) {
       method: 'GET',
       path: target,
       headers: { Host: targetUrl.host },
-      timeout: 5000,
+      timeout: 2000,
     }, (res) => {
       res.resume();
       resolve({ statusCode: res.statusCode, ms: Date.now() - start });
