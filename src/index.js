@@ -3,7 +3,7 @@ import http from 'node:http';
 import chalk from 'chalk';
 
 const file = process.argv[2] || 'proxies.txt';
-const target = process.argv[3] || 'http://example.com';
+const target = process.argv[3] || 'https://httpbin.org/status/204';
 
 let lines;
 try {
