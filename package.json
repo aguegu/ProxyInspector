@@ -1,0 +1,9 @@
+{
+  "type": "module",
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "config": "^4.0.0",
+    "dotenv-flow": "^4.1.0",
+    "https-proxy-agent": "^7.0.6"
+  }
+}
