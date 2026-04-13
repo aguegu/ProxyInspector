@@ -4,7 +4,7 @@ import net from 'node:net';
 import chalk from 'chalk';
 
 const file = process.argv[2] || 'proxies.txt';
-const target = process.argv[3] || 'http://httpbin.org/status/204';
+const target = process.argv[3] || 'http://ifconfig.me/ip';
 const timeout = 5000;
 
 let lines;
