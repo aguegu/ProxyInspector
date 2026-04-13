@@ -4,7 +4,8 @@ import net from 'node:net';
 import chalk from 'chalk';
 
 const file = process.argv[2] || 'proxies.txt';
-const target = process.argv[3] || 'https://httpbin.org/status/204';
+const target = process.argv[3] || 'http://httpbin.org/status/204';
+const timeout = 5000;
 
 let lines;
 try {
@@ -34,7 +35,7 @@ const checkHttpProxy = (proxyUrl, targetUrl) => new Promise((resolve, reject) =>
     method: 'GET',
     path: target,
     headers: { Host: targetUrl.host },
-    timeout: 2000,
+    timeout,
   }, (res) => {
     const chunks = [];
     res.on('data', (chunk) => chunks.push(chunk));
@@ -62,7 +63,7 @@ const checkSocks5Proxy = (proxyUrl, targetUrl) => new Promise((resolve, reject) 
     socket.write(Buffer.from([0x05, 0x01, 0x00]));
   });
 
-  socket.setTimeout(2000);
+  socket.setTimeout(timeout);
   socket.on('timeout', () => {
     socket.destroy();
     reject(new Error('timeout'));
