@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import chalk from 'chalk';
 
 const file = process.argv[2] || 'proxies.txt';
@@ -24,34 +25,97 @@ if (proxies.length === 0) {
 
 console.log(`Checking ${proxies.length} proxies against ${target}\n`);
 
+const checkHttpProxy = (proxyUrl, targetUrl) => new Promise((resolve, reject) => {
+  const start = Date.now();
+
+  const req = http.request({
+    host: proxyUrl.hostname,
+    port: proxyUrl.port || 80,
+    method: 'GET',
+    path: target,
+    headers: { Host: targetUrl.host },
+    timeout: 2000,
+  }, (res) => {
+    res.resume();
+    resolve({ statusCode: res.statusCode, ms: Date.now() - start });
+  });
+
+  req.on('timeout', () => {
+    req.destroy();
+    reject(new Error('timeout'));
+  });
+
+  req.on('error', (e) => reject(e));
+  req.end();
+});
+
+const checkSocks5Proxy = (proxyUrl, targetUrl) => new Promise((resolve, reject) => {
+  const start = Date.now();
+  const port = parseInt(targetUrl.port || (targetUrl.protocol === 'https:' ? 443 : 80));
+  const host = targetUrl.hostname;
+
+  const socket = net.connect(proxyUrl.port || 1080, proxyUrl.hostname, () => {
+    // SOCKS5 greeting: version 5, 1 method, no-auth
+    socket.write(Buffer.from([0x05, 0x01, 0x00]));
+  });
+
+  socket.setTimeout(2000);
+  socket.on('timeout', () => {
+    socket.destroy();
+    reject(new Error('timeout'));
+  });
+  socket.on('error', (e) => reject(e));
+
+  let step = 'greeting';
+
+  socket.on('data', (data) => {
+    if (step === 'greeting') {
+      if (data[0] !== 0x05 || data[1] !== 0x00) {
+        socket.destroy();
+        return reject(new Error('socks5 auth rejected'));
+      }
+      // Connect request: version, connect cmd, reserved, domain type, domain length, domain, port
+      const hostBuf = Buffer.from(host);
+      const buf = Buffer.alloc(7 + hostBuf.length);
+      buf[0] = 0x05; // version
+      buf[1] = 0x01; // connect
+      buf[2] = 0x00; // reserved
+      buf[3] = 0x03; // domain name
+      buf[4] = hostBuf.length;
+      hostBuf.copy(buf, 5);
+      buf.writeUInt16BE(port, 5 + hostBuf.length);
+      socket.write(buf);
+      step = 'connect';
+    } else if (step === 'connect') {
+      if (data[0] !== 0x05 || data[1] !== 0x00) {
+        socket.destroy();
+        return reject(new Error(`socks5 connect failed (${data[1]})`));
+      }
+      // Tunnel established — send a simple HTTP request through it
+      socket.write(`GET ${targetUrl.pathname || '/'} HTTP/1.1\r\nHost: ${targetUrl.host}\r\nConnection: close\r\n\r\n`);
+      step = 'http';
+    } else if (step === 'http') {
+      const head = data.toString('utf-8', 0, Math.min(data.length, 128));
+      const match = head.match(/^HTTP\/\d\.\d (\d{3})/);
+      socket.destroy();
+      if (match) {
+        resolve({ statusCode: parseInt(match[1]), ms: Date.now() - start });
+      } else {
+        reject(new Error('invalid http response'));
+      }
+    }
+  });
+});
+
 const checkProxy = (proxy) => {
   const proxyUrl = new URL(proxy);
   const targetUrl = new URL(target);
+  const scheme = proxyUrl.protocol.replace(':', '');
 
-  return new Promise((resolve, reject) => {
-    const start = Date.now();
-
-    const req = http.request({
-      host: proxyUrl.hostname,
-      port: proxyUrl.port || 80,
-      method: 'GET',
-      path: target,
-      headers: { Host: targetUrl.host },
-      timeout: 2000,
-    }, (res) => {
-      res.resume();
-      resolve({ statusCode: res.statusCode, ms: Date.now() - start });
-    });
-
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('timeout'));
-    });
-
-    req.on('error', (e) => reject(e));
-    req.end();
-  });
-}
+  if (scheme === 'http') return checkHttpProxy(proxyUrl, targetUrl);
+  if (scheme === 'socks5') return checkSocks5Proxy(proxyUrl, targetUrl);
+  return Promise.reject(new Error(`unsupported scheme: ${scheme}`));
+};
 
 const results = await Promise.allSettled(proxies.map(checkProxy));
 
