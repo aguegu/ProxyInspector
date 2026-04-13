@@ -36,8 +36,11 @@ const checkHttpProxy = (proxyUrl, targetUrl) => new Promise((resolve, reject) =>
     headers: { Host: targetUrl.host },
     timeout: 2000,
   }, (res) => {
-    res.resume();
-    resolve({ statusCode: res.statusCode, ms: Date.now() - start });
+    const chunks = [];
+    res.on('data', (chunk) => chunks.push(chunk));
+    res.on('end', () => {
+      resolve({ statusCode: res.statusCode, body: Buffer.concat(chunks).toString(), ms: Date.now() - start });
+    });
   });
 
   req.on('timeout', () => {
@@ -67,6 +70,20 @@ const checkSocks5Proxy = (proxyUrl, targetUrl) => new Promise((resolve, reject) 
   socket.on('error', (e) => reject(e));
 
   let step = 'greeting';
+  const httpChunks = [];
+
+  socket.on('close', () => {
+    if (httpChunks.length === 0) return;
+    const raw = Buffer.concat(httpChunks).toString();
+    const match = raw.match(/^HTTP\/\d\.\d (\d{3})/);
+    if (match) {
+      const bodyStart = raw.indexOf('\r\n\r\n');
+      const body = bodyStart !== -1 ? raw.slice(bodyStart + 4) : '';
+      resolve({ statusCode: parseInt(match[1]), body, ms: Date.now() - start });
+    } else {
+      reject(new Error('invalid http response'));
+    }
+  });
 
   socket.on('data', (data) => {
     if (step === 'greeting') {
@@ -95,14 +112,7 @@ const checkSocks5Proxy = (proxyUrl, targetUrl) => new Promise((resolve, reject) 
       socket.write(`GET ${targetUrl.pathname || '/'} HTTP/1.1\r\nHost: ${targetUrl.host}\r\nConnection: close\r\n\r\n`);
       step = 'http';
     } else if (step === 'http') {
-      const head = data.toString('utf-8', 0, Math.min(data.length, 128));
-      const match = head.match(/^HTTP\/\d\.\d (\d{3})/);
-      socket.destroy();
-      if (match) {
-        resolve({ statusCode: parseInt(match[1]), ms: Date.now() - start });
-      } else {
-        reject(new Error('invalid http response'));
-      }
+      httpChunks.push(data);
     }
   });
 });
@@ -125,6 +135,7 @@ for (let i = 0; i < proxies.length; i++) {
   if (r.status === 'fulfilled') {
     good++;
     console.log(chalk.green(`✔ ${proxies[i]}`) + chalk.gray(` ${r.value.statusCode} ${r.value.ms}ms`));
+    if (r.value.body) console.log(chalk.dim(r.value.body.trim()));
   } else {
     console.log(chalk.red(`✖ ${proxies[i]}`) + chalk.gray(` ${r.reason.message}`));
   }
